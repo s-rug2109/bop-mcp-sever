@@ -1,0 +1,405 @@
+openapi: 3.0.1
+info:
+  title: Smart Building IoT API (Complete)
+  description: API Gateway Integrationを含む完全版定義
+  version: 1.0.0
+
+components:
+  securitySchemes:
+    CognitoAuth:
+      type: apiKey
+      name: Authorization
+      in: header
+      x-amazon-apigateway-authtype: cognito_user_pools
+      x-amazon-apigateway-authorizer:
+        type: cognito_user_pools
+        providerARNs:
+          - "${COGNITO_USER_POOL_ARN}"
+
+  schemas:
+    # --- 既存スキーマ ---
+    CommandItem:
+      type: object
+      required: [point_id, value]
+      properties:
+        point_id: {type: string}
+        value: {type: number}
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string}
+        password: {type: string}
+    RefreshTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: {type: string}
+    PresetCreateRequest:
+      type: object
+      required: [name, commands]
+      properties:
+        name: {type: string}
+        commands:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandItem'
+    ScheduleCreateRequest:
+      type: object
+      required: [type, point_id, value]
+      properties:
+        type: {type: string, enum: [ONE_TIME, RECURRING]}
+        point_id: {type: string}
+        value: {type: number}
+        at_time: {type: string}
+        cron_expression: {type: string}
+
+    # --- 新規追加スキーマ ---
+    DigitalTwinSearchRequest:
+      type: object
+      required: [query_type]
+      properties:
+        query_type:
+          type: string
+          enum: [topology, children, filter, details]
+          description: 検索タイプ
+        depth:
+          type: string
+          enum: [Space, Equipment, Point]
+          description: topology時の取得階層深さ
+        point_id:
+          oneOf:
+            - type: string
+            - type: array
+              items: {type: string}
+          description: 対象のUUID (children時は単一文字列、details時は配列)
+        entity_id:
+          oneOf:
+            - type: string
+            - type: array
+              items: {type: string}
+          description: 対象のTwinMakerID (details時などに利用可能)
+        filters:
+          type: object
+          description: filter時の検索条件
+
+    PointDataLatestRequest:
+      type: object
+      required: [point_id]
+      properties:
+        point_id:
+          type: array
+          items: {type: string}
+          description: 取得対象のUUIDリスト
+
+    PointDataHistoryRequest:
+      type: object
+      required: [point_id]
+      properties:
+        point_id:
+          type: array
+          items: {type: string}
+          description: 取得対象のUUIDリスト
+        start_time:
+          type: string
+          format: date-time
+          description: 開始日時 (ISO8601)
+        end_time:
+          type: string
+          format: date-time
+          description: 終了日時 (ISO8601)
+        scan_forward:
+          type: boolean
+          default: true
+          description: true=古い順, false=新しい順
+
+security:
+  - CognitoAuth: []
+
+paths:
+  # ==========================================
+  # 認証 (Auth) API
+  # ==========================================
+  /auth/login:
+    post:
+      summary: ログイン
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_AUTH_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  /auth/refresh:
+    post:
+      summary: トークン更新
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_AUTH_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  # ==========================================
+  # デジタルツイン (Digital Twin) API
+  # ==========================================
+  /digital-twin/search:
+    post:
+      summary: デジタルツイン情報取得
+      description: |
+        query_typeにより以下の情報を取得します。
+        - topology: 建物の階層構造
+        - children: 指定したpoint_id(親)の子要素
+        - filter: 条件指定による横断検索
+        - details: 詳細プロパティ
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DigitalTwinSearchRequest'
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_DIGITAL_TWIN_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  /digital-twin/{entity_id}:
+    patch:
+      summary: デジタルツイン情報更新
+      description: 指定したエンティティのメタデータを更新します。
+      parameters:
+        - in: path
+          name: entity_id
+          required: true
+          schema: {type: string}
+          description: 更新対象のTwinMakerエンティティID
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: 更新するプロパティ情報
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_DIGITAL_TWIN_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  # ==========================================
+  # ポイントデータ (Point Data) API
+  # ==========================================
+  /point-data/latest:
+    post:
+      summary: 最新値取得
+      description: 指定されたpoint_id(UUID)群の現在の値を取得します。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PointDataLatestRequest'
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_POINT_DATA_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  /point-data/history:
+    post:
+      summary: 履歴取得
+      description: 指定されたpoint_id(UUID)の直近72時間以内の時系列データを取得します。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PointDataHistoryRequest'
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_POINT_DATA_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  # ==========================================
+  # 制御 (Command) API
+  # ==========================================
+  /command:
+    post:
+      summary: 機器制御
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                commands:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/CommandItem'
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_CONTROL_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  # ==========================================
+  # スケジュール (Schedule) API
+  # ==========================================
+  /schedule:
+    get:
+      summary: スケジュール一覧
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_SCHEDULE_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+    post:
+      summary: スケジュール登録
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleCreateRequest'
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_SCHEDULE_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  /schedule/{schedule_id}:
+    delete:
+      summary: スケジュール削除
+      parameters:
+        - in: path
+          name: schedule_id
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_SCHEDULE_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  # ==========================================
+  # プリセット (Preset) API
+  # ==========================================
+  /presets:
+    get:
+      summary: プリセット一覧
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_PRESET_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+    post:
+      summary: プリセット登録
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresetCreateRequest'
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_PRESET_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  /presets/{preset_id}:
+    delete:
+      summary: プリセット削除
+      parameters:
+        - in: path
+          name: preset_id
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_PRESET_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  /presets/{preset_id}/execute:
+    post:
+      summary: プリセット実行
+      parameters:
+        - in: path
+          name: preset_id
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_PRESET_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+  # ==========================================
+  # 履歴 (History) API - Legacy
+  # ==========================================
+  /history:
+    get:
+      summary: 履歴参照 (Legacy)
+      parameters:
+        - in: query
+          name: event_id
+          schema: {type: string}
+        - in: query
+          name: point_id
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_HISTORY_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy

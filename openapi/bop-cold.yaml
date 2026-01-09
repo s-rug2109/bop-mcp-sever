@@ -1,0 +1,357 @@
+openapi: 3.0.1
+info:
+  title: Cold Data Extraction API
+  description: |
+    Athenaを利用してS3からデータを抽出し、署名付きURLを発行するAPI。
+    処理は非同期で行われ、完了通知はWebhookまたはポーリングで確認します。
+    認証にはCognito User PoolのIDトークンが必要です。
+  version: 1.0.0
+
+components:
+  securitySchemes:
+    CognitoAuth:
+      type: apiKey
+      description: Cognito User Poolから発行されたID TokenをAuthorizationヘッダーに設定してください。
+      name: Authorization
+      in: header
+      x-amazon-apigateway-authtype: cognito_user_pools
+      x-amazon-apigateway-authorizer:
+        type: cognito_user_pools
+        providerARNs:
+          - "${COGNITO_USER_POOL_ARN}"
+
+  schemas:
+    # --- Common ---
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Invalid parameter: taskId is required"
+
+    # --- Base Schema ---
+    TaskBase:
+      type: object
+      properties:
+        taskId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, COMPLETED, FAILED, SCHEDULED, DISABLED, DELETED]
+          description: 現在のタスクステータス
+        execType:
+          type: integer
+          enum: [1, 2, 3]
+          description: "1: 即時実行, 2: 日時指定予約, 3: 定期実行"
+        startDate:
+          type: string
+          format: date-time
+          description: データ抽出範囲（開始）
+        endDate:
+          type: string
+          format: date-time
+          description: データ抽出範囲（終了）
+        fileType:
+          type: string
+          example: CSV
+        outputUrl:
+          type: string
+          description: 抽出ファイルのS3格納パス
+          example: "s3://bop-output/1234-5678-uuid/"
+        createdTime:
+          type: string
+          format: date-time
+        webhookUrl:
+          type: string
+          format: uri
+          description: 完了通知先URL
+
+    # --- Responses ---
+    TaskDetail:
+      allOf:
+        - $ref: '#/components/schemas/TaskBase'
+        - type: object
+          properties:
+            downloadUrls:
+              type: array
+              description: ダウンロード用署名付きURLのリスト（ステータスがCOMPLETED時のみ付与）
+              items:
+                type: object
+                properties:
+                  fileName:
+                    type: string
+                    example: "results.csv"
+                  downloadUrl:
+                    type: string
+                    format: uri
+                    description: 1時間有効なダウンロードリンク
+            hasOutput:
+              type: boolean
+              description: 出力ファイルが存在するか
+
+    TaskList:
+      type: object
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskBase'
+
+    # --- Requests ---
+    CreateTaskRequest:
+      type: object
+      description: タスク作成パラメータ
+      required: [startDate, endDate, execType]
+      properties:
+        startDate:
+          type: string
+          format: date-time
+          description: 抽出対象データの開始日時
+          example: "2025-12-21T00:00:00Z"
+        endDate:
+          type: string
+          format: date-time
+          description: 抽出対象データの終了日時
+          example: "2025-12-25T23:59:59Z"
+        execType:
+          type: integer
+          description: "1=即時, 2=日時指定, 3=定期"
+          example: 1
+        fileType:
+          type: string
+          default: CSV
+          enum: [CSV, JSON, PARQUET]
+        webhookUrl:
+          type: string
+          format: uri
+          description: 完了時に通知を受け取るURL
+          example: "https://api.mysystem.com/webhook/callback"
+        executionDate:
+          type: string
+          description: "execType=2の場合に必須。予約実行日時。形式: at(yyyy-mm-ddThh:mm:ss)"
+          example: "2026-01-10T10:00:00"
+        schedule:
+          type: string
+          description: "execType=3の場合に必須。cron式またはrate式。"
+          example: "cron(0 12 * * ? *)"
+        pointFilter:
+          type: object
+          description: "抽出対象を絞り込む条件（WHERE句に変換されます）"
+          example:
+            building:
+              values: ["Building-A"]
+            level:
+              values: ["2F", "3F"]
+          additionalProperties:
+            type: object
+            properties:
+              values:
+                type: array
+                items:
+                  type: string
+
+    UpdateTaskRequest:
+      type: object
+      required: [taskId, action]
+      properties:
+        taskId:
+          type: string
+          format: uuid
+        action:
+          type: string
+          enum: [ENABLE, DISABLE]
+          description: スケジュールの再開(ENABLE)または停止(DISABLE)
+
+    DeleteTaskRequest:
+      type: object
+      required: [taskId]
+      properties:
+        taskId:
+          type: string
+          format: uuid
+
+security:
+  - CognitoAuth: []
+
+paths:
+  /cold-task:
+    get:
+      summary: タスク一覧または詳細の取得
+      description: |
+        - クエリパラメータ `id` がある場合: 特定タスクの `TaskDetail` (downloadUrls付き) を返します。
+        - クエリパラメータがない場合: 全タスクの `TaskList` を返します。
+      parameters:
+        - name: id
+          in: query
+          description: 取得対象のタスクID
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 取得成功
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskDetail'
+                  - $ref: '#/components/schemas/TaskList'
+        '404':
+          description: タスクが見つかりません
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_COLD_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+    post:
+      summary: 新規データ抽出タスクの作成・予約
+      description: |
+        データの抽出リクエストを作成します。
+        - 即時実行(1): 即座にStep Functionsを起動します。
+        - 単発予約(2): 指定日時(executionDate)にSchedulerを設定します。
+        - 定期予約(3): cron/rate式に基づき実行します。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+      responses:
+        '200':
+          description: タスク受付成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: PROCESSING
+                  outputUrl:
+                    type: string
+                    example: "s3://bop-output/uuid/"
+        '500':
+          description: サーバーエラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_COLD_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+    put:
+      summary: スケジュールの有効化・無効化
+      description: "予約タスクの状態を `ENABLED` または `DISABLED` に切り替えます。"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTaskRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  status:
+                    type: string
+        '404':
+          description: 対象が見つかりません
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_COLD_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+    delete:
+      summary: タスクの削除
+      description: |
+        リクエストボディで `taskId` を受け取り、スケジュールを削除、DB上のステータスを `DELETED` に変更します。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteTaskRequest'
+      responses:
+        '200':
+          description: 削除完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  taskId:
+                    type: string
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_COLD_ARN}/invocations"
+        passthroughBehavior: when_no_match
+        httpMethod: POST
+        type: aws_proxy
+
+# ---------------------------------------------------------
+# Webhook Callbacks (抽出完了後の外部通知)
+# ---------------------------------------------------------
+callbacks:
+  OnExtractionCompleted:
+    '{$request.body#/webhookUrl}':
+      post:
+        summary: データ抽出完了通知
+        description: Athenaの抽出完了後、WebhookSender LambdaよりこのURLへPOST送信されます。
+        requestBody:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: COMPLETED
+                  outputUrls:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        fileName:
+                          type: string
+                        downloadUrl:
+                          type: string
+                          format: uri
+        responses:
+          '200':
+            description: 通知受理
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    received:
+                      type: boolean
+                      example: true

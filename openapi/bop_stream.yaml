@@ -1,0 +1,166 @@
+openapi: 3.0.1
+info:
+  title: Smart Building IoT Stream API (WebSocket)
+  description: |
+    リアルタイムデータ配信用のWebSocket API定義です。
+    ※OpenAPI仕様の制約上、WebSocketのアクション（Route Key）をパス（例: /subscribe_points）として記述しています。
+  version: 1.0.0
+
+components:
+  schemas:
+    SubscribeRequest:
+      type: object
+      required: 
+        - action
+        - point_id
+      properties:
+        action:
+          type: string
+          enum: 
+            - subscribe_points
+        subscription_id:
+          type: string
+          default: "default"
+          description: "購読グループID"
+        point_id:
+          type: array
+          items: 
+            type: string
+          description: "購読するpoint_id(UUID)のリスト"
+
+    UnsubscribePointsRequest:
+      type: object
+      required: 
+        - action
+        - point_id
+      properties:
+        action:
+          type: string
+          enum: 
+            - unsubscribe_points
+        subscription_id:
+          type: string
+          default: "default"
+        point_id:
+          type: array
+          items: 
+            type: string
+
+    UnsubscribeSubscriptionRequest:
+      type: object
+      required: 
+        - action
+        - subscription_id
+      properties:
+        action:
+          type: string
+          enum: 
+            - unsubscribe_subscription
+        subscription_id:
+          type: string
+          description: "一括解除するグループID"
+
+    GetSubscriptionListRequest:
+      type: object
+      required: 
+        - action
+      properties:
+        action:
+          type: string
+          enum: 
+            - get_subscription_list
+        subscription_id:
+          type: string
+
+    # プッシュ通知スキーマ
+    PointValue:
+      type: object
+      properties:
+        point_id: 
+          type: string
+        value: 
+          type: number
+        timestamp: 
+          type: string
+        quality: 
+          type: string
+
+# AWS API Gateway WebSocket用ルート選択式
+x-amazon-apigateway-route-selection-expression: "$request.body.action"
+
+paths:
+  # ----------------------------------------
+  # [11] 購読追加
+  # ----------------------------------------
+  /subscribe_points:
+    post:
+      summary: ポイント購読 (subscribe_points)
+      description: クライアントから `subscribe_points` アクションを送信します。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscribeRequest'
+      responses:
+        '200':
+          description: Ack受信
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_WEBSOCKET_HANDLER_ARN}/invocations"
+        type: aws_proxy
+
+  # ----------------------------------------
+  # [12] 購読解除 (ポイント指定)
+  # ----------------------------------------
+  /unsubscribe_points:
+    post:
+      summary: ポイント購読解除 (unsubscribe_points)
+      description: クライアントから `unsubscribe_points` アクションを送信します。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnsubscribePointsRequest'
+      responses:
+        '200':
+          description: Ack受信
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_WEBSOCKET_HANDLER_ARN}/invocations"
+        type: aws_proxy
+
+  # ----------------------------------------
+  # [NEW] 購読解除 (グループ一括)
+  # ----------------------------------------
+  /unsubscribe_subscription:
+    post:
+      summary: グループ一括解除 (unsubscribe_subscription)
+      description: クライアントから `unsubscribe_subscription` アクションを送信します。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnsubscribeSubscriptionRequest'
+      responses:
+        '200':
+          description: Ack受信
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_WEBSOCKET_HANDLER_ARN}/invocations"
+        type: aws_proxy
+
+  # ----------------------------------------
+  # [13] 購読リスト確認
+  # ----------------------------------------
+  /get_subscription_list:
+    post:
+      summary: 購読リスト確認 (get_subscription_list)
+      description: クライアントから `get_subscription_list` アクションを送信します。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetSubscriptionListRequest'
+      responses:
+        '200':
+          description: リスト受信
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_WEBSOCKET_HANDLER_ARN}/invocations"
+        type: aws_proxy
