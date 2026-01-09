@@ -8,12 +8,12 @@ Building OS MCP Server
 
 ### 目的
 
-ビルOSの各種APIをMCPサーバー経由で提供し、AIエージェントがビル管理機能を利用できるようにする。
-将来的にはAgent-to-Agent (A2A)通信により、複数のビルエージェントが協調して都市機能を向上させる。
+スマートビルディングの各種APIをMCPサーバー経由で提供し、AIエージェントがビル管理機能を利用できるようにする。
+認証、IoT制御、データ抽出、リアルタイム通信の4つのAPIドメインを統合し、包括的なビル管理システムを構築する。
 
 ### アーキテクチャ方針
 
-疎結合型 - Building OS APIをAPI Gateway経由で利用し、MCPサーバーは外部インターフェースとして機能する
+疎結合型 - 既存のBuilding OS APIをAPI Gateway経由で利用し、MCPサーバーは外部インターフェースとして機能する
 
 ---
 
@@ -22,39 +22,39 @@ Building OS MCP Server
 ### システム構成図
 
 ```
-┌────────────────────────────────────────────────┐
-│         Urban Agent Orchestration Layer       │
-│    (複数ビルエージェント間の協調制御)          │
-└────────────────┬───────────────────────────────┘
-                 │
-    ┌────────────┼────────────┐
-    │            │            │
-┌───▼────┐  ┌───▼────┐  ┌───▼────┐
-│Building│  │Building│  │Building│
-│Agent A │  │Agent B │  │Agent C │
-│(MCP)   │  │(MCP)   │  │(MCP)   │
-└───┬────┘  └───┬────┘  └───┬────┘
-    │           │           │
-┌───▼───────────▼───────────▼──────┐
-│    Building OS API Gateway       │
-│  - Authentication (Cognito)      │
-│  - Rate Limiting                 │
-│  - API Versioning                │
-│  - Request Routing               │
-└───┬──────────────────────────────┘
-    │
-┌───▼──────────────────────────────┐
-│   Microservices Layer            │
-│  ┌──────┐ ┌──────┐ ┌──────┐    │
-│  │Space │ │Energy│ │Access│    │
-│  │ API  │ │ API  │ │ API  │    │
-│  └──┬───┘ └──┬───┘ └──┬───┘    │
-└─────┼────────┼────────┼─────────┘
-      │        │        │
-┌─────▼────────▼────────▼─────────┐
-│     AWS Backend Services         │
-│  S3 / DynamoDB / Lambda / etc.  │
-└──────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│              AI Agent Layer                     │
+│         (Claude, GPT, etc.)                     │
+└─────────────────┬───────────────────────────────┘
+                  │ MCP Protocol
+┌─────────────────▼───────────────────────────────┐
+│            MCP Server                           │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌────────┐│
+│  │  Auth   │ │   Hot   │ │  Cold   │ │ Stream ││
+│  │ Client  │ │ Client  │ │ Client  │ │ Client ││
+│  └─────────┘ └─────────┘ └─────────┘ └────────┘│
+└─────────────────┬───────────────────────────────┘
+                  │ HTTPS/WebSocket
+┌─────────────────▼───────────────────────────────┐
+│           API Gateway Cluster                   │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌────────┐│
+│  │  Auth   │ │   Hot   │ │  Cold   │ │ Stream ││
+│  │   API   │ │   API   │ │   API   │ │   API  ││
+│  └─────────┘ └─────────┘ └─────────┘ └────────┘│
+└─────────────────┬───────────────────────────────┘
+                  │
+┌─────────────────▼───────────────────────────────┐
+│              Lambda Functions                   │
+│ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌────────┐│
+│ │ Auth │ │ IoT  │ │ Data │ │ Cold │ │WebSocket││
+│ │      │ │Control│ │Query │ │Extract│ │Handler ││
+│ └──────┘ └──────┘ └──────┘ └──────┘ └────────┘│
+└─────────────────┬───────────────────────────────┘
+                  │
+┌─────────────────▼───────────────────────────────┐
+│         Backend Services & Data Layer           │
+│  Cognito | DynamoDB | S3 | Athena | Timestream │
+└─────────────────────────────────────────────────┘
 ```
 
 ### 技術スタック
@@ -64,19 +64,21 @@ Building OS MCP Server
 | Runtime      | Node.js                                                | 20.x       | MCPサーバー実行環境      |
 | 言語         | TypeScript                                             | 5.x        | 型安全な開発             |
 | Framework    | @modelcontextprotocol/sdk                              | latest     | MCPサーバー実装          |
+| HTTP Client  | axios                                                  | latest     | API通信                  |
+| WebSocket    | ws                                                     | latest     | リアルタイム通信         |
 | IaC          | AWS CDK                                                | 2.x        | インフラストラクチャ定義 |
 | Testing      | Vitest                                                 | latest     | ユニット・統合テスト     |
 | Linting      | ESLint + Prettier                                      | latest     | コード品質管理           |
-| AWS Services | API Gateway, Lambda, Cognito, S3, DynamoDB, CloudWatch | -          | バックエンド基盤         |
+| AWS Services | API Gateway, Lambda, Cognito, S3, DynamoDB, Athena    | -          | バックエンド基盤         |
 
 ### 設計原則
 
 1. **API First**: OpenAPI 3.0仕様に基づく設計
-2. **Agent-to-Agent (A2A) Ready**: エージェント間協調を前提とした設計
+2. **Domain Separation**: Auth/Hot/Cold/Streamの4ドメイン分離
 3. **Multi-Stakeholder Support**: テナント、オーナー、BM、PM等の多様なステークホルダーに対応
 4. **Stateless**: MCPサーバーはステートレスに保ち、スケーラビリティを確保
 5. **Security by Default**: 認証・認可をAPI Gateway層で実施
-6. **Observability**: ログ、メトリクス、トレーシングを標準実装
+6. **Real-time Ready**: WebSocketによるリアルタイム通信対応
 
 ---
 
@@ -167,462 +169,45 @@ building-os-mcp/
 
 ## 🔌 API仕様（OpenAPI 3.0）
 
-### Building OS API エンドポイント
+### APIドメイン構成
 
-```yaml
-openapi: 3.0.0
-info:
-  title: Building OS API
-  version: 1.0.0
-  description: ビルOS API - MCPサーバーから利用
-  contact:
-    name: Building OS Team
+システムは4つの独立したAPIドメインで構成されています：
 
-servers:
-  - url: https://api.building-os.example.com/v1
-    description: Production
-  - url: https://api-staging.building-os.example.com/v1
-    description: Staging
+#### 1. Auth API (認証)
+- **目的**: Cognitoベースのユーザー認証
+- **エンドポイント**:
+  - `POST /auth/login` - ユーザーログイン
+  - `POST /auth/refresh` - トークン更新
+- **特徴**: 認証不要、JWTトークン発行
 
-security:
-  - BearerAuth: []
+#### 2. Hot API (IoT制御)
+- **目的**: リアルタイムIoTデバイス制御とデータ取得
+- **主要エンドポイント**:
+  - `POST /digital-twin/search` - デジタルツイン情報検索
+  - `POST /point-data/latest` - 最新値取得
+  - `POST /point-data/history` - 履歴データ取得
+  - `POST /command` - 機器制御コマンド送信
+  - `GET/POST/DELETE /schedule` - スケジュール管理
+  - `GET/POST/DELETE /presets` - プリセット管理
+- **特徴**: Cognito認証必須、高頻度アクセス
 
-paths:
-  /buildings/{buildingId}/status:
-    get:
-      summary: ビルの現在状態を取得
-      description: 占有率、エネルギー使用量、各種システムの稼働状況を返す
-      tags: [Building Management]
-      parameters:
-        - name: buildingId
-          in: path
-          required: true
-          schema:
-            type: string
-          description: ビルID（例：building-001）
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BuildingStatus'
-              example:
-                buildingId: "building-001"
-                timestamp: "2024-01-15T10:30:00Z"
-                occupancy:
-                  current: 450
-                  capacity: 600
-                  percentage: 75
-                energyUsage:
-                  current: 320
-                  daily: 5400
-                  trend: "stable"
-                systems:
-                  hvac: "normal"
-                  lighting: "normal"
-                  security: "normal"
-        '401':
-          $ref: '#/components/responses/UnauthorizedError'
-        '404':
-          $ref: '#/components/responses/NotFoundError'
+#### 3. Cold API (データ抽出)
+- **目的**: Athenaを使用した大規模データ抽出
+- **エンドポイント**:
+  - `GET /cold-task` - タスク一覧・詳細取得
+  - `POST /cold-task` - 新規データ抽出タスク作成
+  - `PUT /cold-task` - スケジュール有効化・無効化
+  - `DELETE /cold-task` - タスク削除
+- **特徴**: 非同期処理、Webhook通知、署名付きURL発行
 
-  /buildings/{buildingId}/spaces:
-    get:
-      summary: スペース一覧を取得
-      tags: [Space Management]
-      parameters:
-        - name: buildingId
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: floor
-          in: query
-          schema:
-            type: integer
-          description: フロア番号でフィルタ
-        - name: type
-          in: query
-          schema:
-            type: string
-            enum: [meeting_room, workspace, common_area]
-          description: スペースタイプでフィルタ
-        - name: available
-          in: query
-          schema:
-            type: boolean
-          description: 利用可能なスペースのみ
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  spaces:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Space'
-                  total:
-                    type: integer
-
-  /buildings/{buildingId}/spaces/{spaceId}/bookings:
-    post:
-      summary: スペースを予約
-      tags: [Space Management]
-      parameters:
-        - name: buildingId
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: spaceId
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/BookingRequest'
-      responses:
-        '201':
-          description: 予約成功
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Booking'
-        '409':
-          description: 予約競合
-
-  /buildings/{buildingId}/energy:
-    get:
-      summary: エネルギー使用状況を取得
-      tags: [Energy Management]
-      parameters:
-        - name: buildingId
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: period
-          in: query
-          schema:
-            type: string
-            enum: [hourly, daily, weekly, monthly]
-            default: daily
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EnergyData'
-
-  /agent/collaborate:
-    post:
-      summary: エージェント間協調リクエスト
-      description: 他のビルエージェントに協力を要請
-      tags: [Agent Collaboration]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CollaborationRequest'
-      responses:
-        '202':
-          description: リクエスト受付
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CollaborationResponse'
-
-  /agent/capabilities:
-    get:
-      summary: エージェントの能力を取得
-      description: このビルエージェントが提供できる機能一覧
-      tags: [Agent Collaboration]
-      parameters:
-        - name: buildingId
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: 成功
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AgentCapabilities'
-
-components:
-  securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: Cognito発行のJWTトークン
-
-  schemas:
-    BuildingStatus:
-      type: object
-      required:
-        - buildingId
-        - timestamp
-      properties:
-        buildingId:
-          type: string
-          description: ビルID
-        timestamp:
-          type: string
-          format: date-time
-          description: データ取得時刻
-        occupancy:
-          type: object
-          properties:
-            current:
-              type: integer
-              description: 現在の在館人数
-            capacity:
-              type: integer
-              description: 最大収容人数
-            percentage:
-              type: number
-              format: float
-              description: 占有率（%）
-        energyUsage:
-          type: object
-          properties:
-            current:
-              type: number
-              format: float
-              description: 現在の使用電力（kW）
-            daily:
-              type: number
-              format: float
-              description: 本日の累積使用量（kWh）
-            trend:
-              type: string
-              enum: [up, down, stable]
-              description: トレンド
-        systems:
-          type: object
-          properties:
-            hvac:
-              type: string
-              enum: [normal, warning, error]
-            lighting:
-              type: string
-              enum: [normal, warning, error]
-            security:
-              type: string
-              enum: [normal, warning, error]
-
-    Space:
-      type: object
-      required:
-        - spaceId
-        - buildingId
-        - name
-        - type
-      properties:
-        spaceId:
-          type: string
-        buildingId:
-          type: string
-        floor:
-          type: integer
-        name:
-          type: string
-        type:
-          type: string
-          enum: [meeting_room, workspace, common_area, private_office]
-        capacity:
-          type: integer
-        available:
-          type: boolean
-        amenities:
-          type: array
-          items:
-            type: string
-          example: ["projector", "whiteboard", "video_conference"]
-        currentBooking:
-          $ref: '#/components/schemas/Booking'
-
-    BookingRequest:
-      type: object
-      required:
-        - userId
-        - startTime
-        - endTime
-      properties:
-        userId:
-          type: string
-        startTime:
-          type: string
-          format: date-time
-        endTime:
-          type: string
-          format: date-time
-        purpose:
-          type: string
-        attendees:
-          type: integer
-
-    Booking:
-      type: object
-      properties:
-        bookingId:
-          type: string
-        spaceId:
-          type: string
-        userId:
-          type: string
-        startTime:
-          type: string
-          format: date-time
-        endTime:
-          type: string
-          format: date-time
-        status:
-          type: string
-          enum: [confirmed, pending, cancelled]
-        createdAt:
-          type: string
-          format: date-time
-
-    EnergyData:
-      type: object
-      properties:
-        buildingId:
-          type: string
-        period:
-          type: string
-        data:
-          type: array
-          items:
-            type: object
-            properties:
-              timestamp:
-                type: string
-                format: date-time
-              consumption:
-                type: number
-                format: float
-              cost:
-                type: number
-                format: float
-
-    CollaborationRequest:
-      type: object
-      required:
-        - sourceBuildingId
-        - targetBuildingId
-        - task
-      properties:
-        sourceBuildingId:
-          type: string
-          description: 要請元のビルID
-        targetBuildingId:
-          type: string
-          description: 要請先のビルID
-        task:
-          type: string
-          description: 協調タスク名
-          example: "prepare_for_large_event"
-        params:
-          type: object
-          description: タスク固有のパラメータ
-          additionalProperties: true
-        priority:
-          type: string
-          enum: [low, medium, high, urgent]
-          default: medium
-        deadline:
-          type: string
-          format: date-time
-
-    CollaborationResponse:
-      type: object
-      properties:
-        requestId:
-          type: string
-        status:
-          type: string
-          enum: [accepted, rejected, processing]
-        estimatedCompletionTime:
-          type: string
-          format: date-time
-        message:
-          type: string
-
-    AgentCapabilities:
-      type: object
-      properties:
-        buildingId:
-          type: string
-        capabilities:
-          type: array
-          items:
-            type: string
-          example: 
-            - "space_management"
-            - "energy_optimization"
-            - "visitor_management"
-            - "emergency_coordination"
-        version:
-          type: string
-        lastUpdated:
-          type: string
-          format: date-time
-
-    Error:
-      type: object
-      required:
-        - code
-        - message
-      properties:
-        code:
-          type: string
-        message:
-          type: string
-        details:
-          type: object
-
-  responses:
-    UnauthorizedError:
-      description: 認証エラー
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            code: "UNAUTHORIZED"
-            message: "Invalid or expired token"
-
-    NotFoundError:
-      description: リソースが見つからない
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            code: "NOT_FOUND"
-            message: "Building not found"
-
-    ValidationError:
-      description: バリデーションエラー
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-```
+#### 4. Stream API (WebSocket)
+- **目的**: リアルタイムデータ配信
+- **アクション**:
+  - `subscribe_points` - ポイント購読
+  - `unsubscribe_points` - ポイント購読解除
+  - `unsubscribe_subscription` - グループ一括解除
+  - `get_subscription_list` - 購読リスト確認
+- **特徴**: イベントドリブン、リアルタイムプッシュ通知
 
 ---
 
@@ -630,160 +215,383 @@ components:
 
 ### MCPツール定義
 
-#### 1. get_building_status
+#### 1. 認証関連ツール
 
+##### login
 ```typescript
 {
-  name: "get_building_status",
-  description: "ビルの現在の状態（占有率、エネルギー使用量、システム稼働状況）を取得します",
+  name: "login",
+  description: "ユーザー認証を実行し、アクセストークンを取得します",
   inputSchema: {
     type: "object",
+    required: ["username", "password"],
     properties: {
-      buildingId: {
+      username: {
         type: "string",
-        description: "ビルID（省略時は環境変数のBUILDING_IDを使用）"
+        description: "ユーザー名またはメールアドレス"
+      },
+      password: {
+        type: "string",
+        description: "パスワード"
       }
     }
   }
 }
 ```
 
-#### 2. list_spaces
-
+##### refresh_token
 ```typescript
 {
-  name: "list_spaces",
-  description: "ビル内のスペース一覧を取得します。フィルタリングオプションで絞り込み可能です",
+  name: "refresh_token",
+  description: "リフレッシュトークンを使用してアクセストークンを更新します",
   inputSchema: {
     type: "object",
+    required: ["refresh_token"],
     properties: {
-      buildingId: {
-        type: "string"
+      refresh_token: {
+        type: "string",
+        description: "リフレッシュトークン"
+      }
+    }
+  }
+}
+```
+
+#### 2. デジタルツイン関連ツール
+
+##### search_digital_twin
+```typescript
+{
+  name: "search_digital_twin",
+  description: "デジタルツイン情報を検索・取得します",
+  inputSchema: {
+    type: "object",
+    required: ["query_type"],
+    properties: {
+      query_type: {
+        type: "string",
+        enum: ["topology", "children", "filter", "details"],
+        description: "検索タイプ"
       },
-      floor: {
-        type: "number",
-        description: "フロア番号"
+      depth: {
+        type: "string",
+        enum: ["Space", "Equipment", "Point"],
+        description: "topology時の取得階層深さ"
       },
+      point_id: {
+        type: "array",
+        items: { type: "string" },
+        description: "対象のUUIDリスト"
+      },
+      filters: {
+        type: "object",
+        description: "フィルタ条件"
+      }
+    }
+  }
+}
+```
+
+#### 3. ポイントデータ関連ツール
+
+##### get_latest_data
+```typescript
+{
+  name: "get_latest_data",
+  description: "指定したポイントの最新値を取得します",
+  inputSchema: {
+    type: "object",
+    required: ["point_id"],
+    properties: {
+      point_id: {
+        type: "array",
+        items: { type: "string" },
+        description: "取得対象のUUIDリスト"
+      }
+    }
+  }
+}
+```
+
+##### get_history_data
+```typescript
+{
+  name: "get_history_data",
+  description: "指定したポイントの履歴データを取得します",
+  inputSchema: {
+    type: "object",
+    required: ["point_id"],
+    properties: {
+      point_id: {
+        type: "array",
+        items: { type: "string" },
+        description: "取得対象のUUIDリスト"
+      },
+      start_time: {
+        type: "string",
+        format: "date-time",
+        description: "開始日時"
+      },
+      end_time: {
+        type: "string",
+        format: "date-time",
+        description: "終了日時"
+      },
+      scan_forward: {
+        type: "boolean",
+        description: "true=古い順, false=新しい順"
+      }
+    }
+  }
+}
+```
+
+#### 4. 機器制御関連ツール
+
+##### send_command
+```typescript
+{
+  name: "send_command",
+  description: "IoT機器に制御コマンドを送信します",
+  inputSchema: {
+    type: "object",
+    required: ["commands"],
+    properties: {
+      commands: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["point_id", "value"],
+          properties: {
+            point_id: {
+              type: "string",
+              description: "制御対象のUUID"
+            },
+            value: {
+              type: "number",
+              description: "設定値"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+#### 5. スケジュール関連ツール
+
+##### list_schedules
+```typescript
+{
+  name: "list_schedules",
+  description: "登録済みスケジュール一覧を取得します",
+  inputSchema: {
+    type: "object",
+    properties: {}
+  }
+}
+```
+
+##### create_schedule
+```typescript
+{
+  name: "create_schedule",
+  description: "新しいスケジュールを作成します",
+  inputSchema: {
+    type: "object",
+    required: ["type", "point_id", "value"],
+    properties: {
       type: {
         type: "string",
-        enum: ["meeting_room", "workspace", "common_area"],
-        description: "スペースタイプ"
+        enum: ["ONE_TIME", "RECURRING"],
+        description: "スケジュールタイプ"
       },
-      availableOnly: {
-        type: "boolean",
-        description: "利用可能なスペースのみ取得"
+      point_id: {
+        type: "string",
+        description: "対象ポイントUUID"
+      },
+      value: {
+        type: "number",
+        description: "実行時の設定値"
+      },
+      at_time: {
+        type: "string",
+        description: "ONE_TIMEの場合の実行日時"
+      },
+      cron_expression: {
+        type: "string",
+        description: "RECURRINGの場合のCRON式"
       }
     }
   }
 }
 ```
 
-#### 3. book_space
+#### 6. プリセット関連ツール
 
+##### list_presets
 ```typescript
 {
-  name: "book_space",
-  description: "指定したスペースを予約します",
+  name: "list_presets",
+  description: "登録済みプリセット一覧を取得します",
   inputSchema: {
     type: "object",
-    required: ["spaceId", "userId", "startTime", "endTime"],
+    properties: {}
+  }
+}
+```
+
+##### create_preset
+```typescript
+{
+  name: "create_preset",
+  description: "新しいプリセットを作成します",
+  inputSchema: {
+    type: "object",
+    required: ["name", "commands"],
     properties: {
-      buildingId: {
-        type: "string"
-      },
-      spaceId: {
+      name: {
         type: "string",
-        description: "スペースID"
+        description: "プリセット名"
       },
-      userId: {
-        type: "string",
-        description: "予約者のユーザーID"
-      },
-      startTime: {
-        type: "string",
-        description: "開始時刻（ISO 8601形式）"
-      },
-      endTime: {
-        type: "string",
-        description: "終了時刻（ISO 8601形式）"
-      },
-      purpose: {
-        type: "string",
-        description: "利用目的"
+      commands: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["point_id", "value"],
+          properties: {
+            point_id: { type: "string" },
+            value: { type: "number" }
+          }
+        }
       }
     }
   }
 }
 ```
 
-#### 4. get_energy_data
-
+##### execute_preset
 ```typescript
 {
-  name: "get_energy_data",
-  description: "エネルギー使用データを取得します",
+  name: "execute_preset",
+  description: "指定したプリセットを実行します",
   inputSchema: {
     type: "object",
+    required: ["preset_ids"],
     properties: {
-      buildingId: {
-        type: "string"
-      },
-      period: {
-        type: "string",
-        enum: ["hourly", "daily", "weekly", "monthly"],
-        description: "データの期間",
-        default: "daily"
+      preset_ids: {
+        type: "array",
+        items: { type: "string" },
+        description: "実行するプリセットIDリスト"
       }
     }
   }
 }
 ```
 
-#### 5. request_collaboration
+#### 7. データ抽出関連ツール
 
+##### list_extraction_tasks
 ```typescript
 {
-  name: "request_collaboration",
-  description: "他のビルエージェントに協力を要請します（A2A通信）",
+  name: "list_extraction_tasks",
+  description: "データ抽出タスク一覧を取得します",
   inputSchema: {
     type: "object",
-    required: ["targetBuildingId", "task"],
     properties: {
-      targetBuildingId: {
+      task_id: {
         type: "string",
-        description: "要請先のビルID"
-      },
-      task: {
+        description: "特定タスクのID（省略時は全タスク）"
+      }
+    }
+  }
+}
+```
+
+##### create_extraction_task
+```typescript
+{
+  name: "create_extraction_task",
+  description: "新しいデータ抽出タスクを作成します",
+  inputSchema: {
+    type: "object",
+    required: ["startDate", "endDate", "execType"],
+    properties: {
+      startDate: {
         type: "string",
-        description: "協調タスク名"
+        format: "date-time",
+        description: "抽出対象データの開始日時"
       },
-      params: {
+      endDate: {
+        type: "string",
+        format: "date-time",
+        description: "抽出対象データの終了日時"
+      },
+      execType: {
+        type: "integer",
+        enum: [1, 2, 3],
+        description: "1=即時, 2=日時指定, 3=定期"
+      },
+      fileType: {
+        type: "string",
+        enum: ["CSV", "JSON", "PARQUET"],
+        description: "出力ファイル形式"
+      },
+      webhookUrl: {
+        type: "string",
+        description: "完了通知先URL"
+      },
+      pointFilter: {
         type: "object",
-        description: "タスク固有のパラメータ"
-      },
-      priority: {
-        type: "string",
-        enum: ["low", "medium", "high", "urgent"],
-        default: "medium"
+        description: "抽出対象絞り込み条件"
       }
     }
   }
 }
 ```
 
-#### 6. get_agent_capabilities
+#### 8. リアルタイム通信関連ツール
 
+##### subscribe_realtime_data
 ```typescript
 {
-  name: "get_agent_capabilities",
-  description: "指定したビルエージェントの能力（提供可能な機能）を取得します",
+  name: "subscribe_realtime_data",
+  description: "指定したポイントのリアルタイムデータを購読します",
   inputSchema: {
     type: "object",
-    required: ["buildingId"],
+    required: ["point_id"],
     properties: {
-      buildingId: {
+      point_id: {
+        type: "array",
+        items: { type: "string" },
+        description: "購読対象のUUIDリスト"
+      },
+      subscription_id: {
         type: "string",
-        description: "対象のビルID"
+        description: "購読グループID"
+      }
+    }
+  }
+}
+```
+
+##### unsubscribe_realtime_data
+```typescript
+{
+  name: "unsubscribe_realtime_data",
+  description: "リアルタイムデータの購読を解除します",
+  inputSchema: {
+    type: "object",
+    properties: {
+      point_id: {
+        type: "array",
+        items: { type: "string" },
+        description: "解除対象のUUIDリスト（省略時は全解除）"
+      },
+      subscription_id: {
+        type: "string",
+        description: "解除対象のグループID"
       }
     }
   }
@@ -793,7 +601,6 @@ components:
 ### MCPリソース定義
 
 #### 1. building:///info
-
 ```typescript
 {
   uri: "building://{buildingId}/info",
@@ -803,24 +610,42 @@ components:
 }
 ```
 
-#### 2. building:///spaces
-
+#### 2. building:///digital-twin
 ```typescript
 {
-  uri: "building://{buildingId}/spaces",
-  name: "スペース一覧",
-  description: "ビル内の全スペース情報",
+  uri: "building://{buildingId}/digital-twin",
+  name: "デジタルツイン情報",
+  description: "ビルのデジタルツイン構造情報",
   mimeType: "application/json"
 }
 ```
 
 #### 3. building:///realtime
-
 ```typescript
 {
   uri: "building://{buildingId}/realtime",
   name: "リアルタイムデータ",
   description: "ビルのリアルタイム状態情報",
+  mimeType: "application/json"
+}
+```
+
+#### 4. building:///schedules
+```typescript
+{
+  uri: "building://{buildingId}/schedules",
+  name: "スケジュール一覧",
+  description: "登録済みスケジュール情報",
+  mimeType: "application/json"
+}
+```
+
+#### 5. building:///presets
+```typescript
+{
+  uri: "building://{buildingId}/presets",
+  name: "プリセット一覧",
+  description: "登録済みプリセット情報",
   mimeType: "application/json"
 }
 ```
@@ -841,18 +666,48 @@ components:
    - 環境変数からAPIキーを読み込み
    - トークンの有効期限チェック
    - リクエスト署名検証（将来実装）
-3. **ステークホルダー別権限**
+### ステークホルダー別権限
 
-   ```typescript
-   enum Role {
-     TENANT = 'tenant',           // テナント：自社スペースのみ
-     VISITOR = 'visitor',         // 来訪者：公共エリアのみ
-     OWNER = 'owner',             // オーナー：全データ参照可
-     BM = 'building_manager',     // BM：運用管理全般
-     PM = 'property_manager',     // PM：契約・財務データ
-     AGENT = 'agent'              // エージェント：A2A通信
-   }
-   ```
+```typescript
+enum Role {
+  TENANT = 'tenant',           // テナント：自社スペースのみ
+  VISITOR = 'visitor',         // 来訪者：公共エリアのみ
+  OWNER = 'owner',             // オーナー：全データ参照可
+  BM = 'building_manager',     // BM：運用管理全般
+  PM = 'property_manager',     // PM：契約・財務データ
+  ADMIN = 'admin'              // 管理者：全機能アクセス可
+}
+
+// 機能別アクセス権限
+const PERMISSIONS = {
+  // 認証関連
+  AUTH: ['ADMIN', 'BM', 'PM', 'OWNER', 'TENANT', 'VISITOR'],
+  
+  // デジタルツイン情報
+  DIGITAL_TWIN_READ: ['ADMIN', 'BM', 'PM', 'OWNER', 'TENANT'],
+  DIGITAL_TWIN_WRITE: ['ADMIN', 'BM'],
+  
+  // ポイントデータ
+  POINT_DATA_READ: ['ADMIN', 'BM', 'PM', 'OWNER', 'TENANT'],
+  
+  // 機器制御
+  DEVICE_CONTROL: ['ADMIN', 'BM', 'TENANT'],
+  
+  // スケジュール管理
+  SCHEDULE_READ: ['ADMIN', 'BM', 'PM', 'OWNER', 'TENANT'],
+  SCHEDULE_WRITE: ['ADMIN', 'BM', 'TENANT'],
+  
+  // プリセット管理
+  PRESET_READ: ['ADMIN', 'BM', 'PM', 'OWNER', 'TENANT'],
+  PRESET_WRITE: ['ADMIN', 'BM', 'TENANT'],
+  
+  // データ抽出
+  DATA_EXTRACTION: ['ADMIN', 'BM', 'PM', 'OWNER'],
+  
+  // リアルタイムデータ
+  REALTIME_SUBSCRIBE: ['ADMIN', 'BM', 'PM', 'OWNER', 'TENANT']
+};
+```
 
 ### データ保護
 
@@ -869,10 +724,11 @@ components:
 
 | 項目                         | 目標値      | 測定方法           |
 | ---------------------------- | ----------- | ------------------ |
-| API応答時間                  | p95 < 500ms | CloudWatch Metrics |
-| MCP Tool実行時間             | p95 < 1s    | カスタムメトリクス |
-| エージェント間協調レイテンシ | p95 < 2s    | X-Ray トレーシング |
-| 同時リクエスト処理           | 100 req/s   | Load Testing       |
+| API応答時間 (Hot)           | p95 < 500ms | CloudWatch Metrics |
+| API応答時間 (Cold)          | p95 < 30s   | CloudWatch Metrics |
+| MCP Tool実行時間             | p95 < 2s    | カスタムメトリクス |
+| WebSocketメッセージレイテンシ | p95 < 100ms | X-Ray トレーシング |
+| 同時リクエスト処理           | 1000 req/s  | Load Testing       |
 
 ### 可用性
 
@@ -883,10 +739,11 @@ components:
 
 ### スケーラビリティ
 
-- 1ビルあたり1 MCPサーバーインスタンス
-- Lambda同時実行数: 初期100、最大1000
+- MCPサーバー: ステートレス設計で水平スケール対応
+- Lambda同時実行数: 初期1000、最大5000
 - DynamoDB: On-Demand Capacity
-- 将来的に1000棟規模に対応
+- API Gateway: レート制限 10,000 req/s
+- WebSocket: 同時接続数 10,000
 
 ### 監視・ロギング
 
@@ -903,11 +760,36 @@ enum LogLevel {
 interface LogEntry {
   timestamp: string;
   level: LogLevel;
-  buildingId: string;
+  domain: 'auth' | 'hot' | 'cold' | 'stream';
   requestId: string;
+  userId?: string;
   message: string;
   context?: object;
   error?: Error;
+  duration?: number;
+}
+
+// メトリクス定義
+interface Metrics {
+  // APIメトリクス
+  api_requests_total: number;
+  api_request_duration_ms: number;
+  api_errors_total: number;
+  
+  // MCPメトリクス
+  mcp_tool_executions_total: number;
+  mcp_tool_duration_ms: number;
+  mcp_tool_errors_total: number;
+  
+  // WebSocketメトリクス
+  websocket_connections_active: number;
+  websocket_messages_sent: number;
+  websocket_messages_received: number;
+  
+  // ビジネスメトリクス
+  device_commands_sent: number;
+  data_extraction_tasks_created: number;
+  realtime_subscriptions_active: number;
 }
 ```
 
@@ -939,30 +821,124 @@ interface LogEntry {
 ### テストデータ
 
 ```typescript
-// テスト用ビルデータ
-export const mockBuildingData = {
-  buildingId: 'test-building-001',
-  name: 'Test Building A',
-  status: {
-    occupancy: { current: 100, capacity: 200, percentage: 50 },
-    energyUsage: { current: 150, daily: 2500, trend: 'stable' },
-    systems: { hvac: 'normal', lighting: 'normal', security: 'normal' }
+// テスト用認証データ
+export const mockAuthData = {
+  username: 'test-user@example.com',
+  password: 'TestPassword123!',
+  tokens: {
+    access_token: 'mock-access-token',
+    id_token: 'mock-id-token',
+    refresh_token: 'mock-refresh-token',
+    expires_in: 3600
   }
 };
 
-// テスト用スペースデータ
-export const mockSpaces = [
-  {
-    spaceId: 'space-001',
-    buildingId: 'test-building-001',
-    floor: 3,
-    name: 'Meeting Room A',
-    type: 'meeting_room',
-    capacity: 10,
-    available: true,
-    amenities: ['projector', 'whiteboard']
+// テスト用デジタルツインデータ
+export const mockDigitalTwinData = {
+  topology: {
+    building: {
+      id: 'building-001',
+      name: 'Test Building A',
+      floors: [
+        {
+          id: 'floor-001',
+          name: '1F',
+          spaces: [
+            {
+              id: 'space-001',
+              name: 'Meeting Room A',
+              type: 'meeting_room'
+            }
+          ]
+        }
+      ]
+    }
   }
-];
+};
+
+// テスト用ポイントデータ
+export const mockPointData = {
+  latest: [
+    {
+      point_id: 'uuid-temp-001',
+      value: 24.5,
+      timestamp: '2024-01-15T10:30:00Z',
+      quality: 'GOOD'
+    }
+  ],
+  history: [
+    {
+      point_id: 'uuid-temp-001',
+      values: [
+        { timestamp: '2024-01-15T10:00:00Z', value: 24.0 },
+        { timestamp: '2024-01-15T10:30:00Z', value: 24.5 }
+      ]
+    }
+  ]
+};
+
+// テスト用コマンドデータ
+export const mockCommandData = {
+  commands: [
+    {
+      point_id: 'uuid-ac-001',
+      value: 26
+    },
+    {
+      point_id: 'uuid-light-001',
+      value: 1
+    }
+  ]
+};
+
+// テスト用スケジュールデータ
+export const mockScheduleData = {
+  schedules: [
+    {
+      schedule_id: 'sched-001',
+      type: 'RECURRING',
+      point_id: 'uuid-ac-001',
+      value: 26,
+      cron_expression: 'cron(0 9 * * ? *)',
+      status: 'ACTIVE'
+    }
+  ]
+};
+
+// テスト用プリセットデータ
+export const mockPresetData = {
+  presets: [
+    {
+      preset_id: 'preset-001',
+      name: 'Morning Mode',
+      commands: [
+        { point_id: 'uuid-light-001', value: 1 },
+        { point_id: 'uuid-ac-001', value: 26 }
+      ]
+    }
+  ]
+};
+
+// テスト用データ抽出タスクデータ
+export const mockExtractionTaskData = {
+  tasks: [
+    {
+      taskId: 'task-001',
+      status: 'COMPLETED',
+      execType: 1,
+      startDate: '2024-01-01T00:00:00Z',
+      endDate: '2024-01-02T00:00:00Z',
+      fileType: 'CSV',
+      outputUrl: 's3://test-bucket/task-001/',
+      downloadUrls: [
+        {
+          fileName: 'results.csv',
+          downloadUrl: 'https://s3.amazonaws.com/signed-url'
+        }
+      ]
+    }
+  ]
+};
 ```
 
 ---
@@ -982,27 +958,79 @@ export const mockSpaces = [
 ```yaml
 # .github/workflows/ci.yml の構成
 
-stages:
-  - lint:
-      - ESLint
-      - Prettier
-      - TypeScript type check
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      
+      - name: Install dependencies
+        run: pnpm install
+      
+      - name: Lint
+        run: pnpm lint
+      
+      - name: Type check
+        run: pnpm type-check
+      
+      - name: Test
+        run: pnpm test
+      
+      - name: Coverage
+        run: pnpm coverage
   
-  - test:
-      - Unit tests (Vitest)
-      - Integration tests
-      - Coverage report
+  build:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      
+      - name: Install dependencies
+        run: pnpm install
+      
+      - name: Build
+        run: pnpm build
+      
+      - name: Package Lambda
+        run: pnpm package
   
-  - build:
-      - TypeScript compile
-      - Bundle optimization
-      - Lambda package creation
+  deploy-staging:
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Deploy to Staging
+        run: |
+          aws configure set region ${{ vars.AWS_REGION }}
+          pnpm cdk deploy --all --require-approval never
   
-  - deploy:
-      - CDK diff
-      - Manual approval (Production)
-      - CDK deploy
-      - Smoke tests
+  deploy-production:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy to Production
+        run: |
+          aws configure set region ${{ vars.AWS_REGION }}
+          pnpm cdk deploy --all --require-approval never
 ```
 
 ### デプロイ戦略
@@ -1010,6 +1038,7 @@ stages:
 - **Blue/Green Deployment**: Lambda Aliasを使用
 - **カナリアリリース**: 10% → 50% → 100%
 - **ロールバック**: 5分以内に前バージョンに戻せること
+- **スモークテスト**: デプロイ後の基本動作確認
 
 ---
 
@@ -1018,13 +1047,11 @@ stages:
 ```bash
 # .env.example
 
-# Building Configuration
-BUILDING_ID=building-001
-BUILDING_NAME=Example Building A
-
-# Building OS API
-BUILDING_OS_API_URL=https://api.building-os.example.com/v1
-API_KEY=your-api-key-here
+# API Configuration
+AUTH_API_URL=https://auth-api.building-os.example.com
+HOT_API_URL=https://hot-api.building-os.example.com
+COLD_API_URL=https://cold-api.building-os.example.com
+STREAM_API_URL=wss://stream-api.building-os.example.com
 
 # AWS Configuration
 AWS_REGION=ap-northeast-1
@@ -1033,19 +1060,39 @@ AWS_ACCOUNT_ID=123456789012
 # Authentication
 COGNITO_USER_POOL_ID=ap-northeast-1_xxxxxxxxx
 COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxx
+COGNITO_CLIENT_SECRET=your-client-secret-here
+
+# MCP Server Configuration
+MCP_SERVER_NAME=building-os-mcp-server
+MCP_SERVER_VERSION=1.0.0
+MCP_SERVER_PORT=3000
 
 # Logging
 LOG_LEVEL=info
 LOG_FORMAT=json
+LOG_DESTINATION=console
 
 # Performance
 API_TIMEOUT_MS=30000
 RETRY_MAX_ATTEMPTS=3
 RETRY_BACKOFF_MS=1000
+CONCURRENCY_LIMIT=10
+
+# WebSocket Configuration
+WEBSOCKET_RECONNECT_INTERVAL=5000
+WEBSOCKET_MAX_RECONNECT_ATTEMPTS=5
+WEBSOCKET_PING_INTERVAL=30000
 
 # Feature Flags
-ENABLE_A2A_COLLABORATION=true
-ENABLE_REALTIME_UPDATES=false
+ENABLE_AUTH_CACHING=true
+ENABLE_METRICS_COLLECTION=true
+ENABLE_DISTRIBUTED_TRACING=true
+ENABLE_RATE_LIMITING=true
+
+# Development
+DEVELOPMENT_MODE=false
+MOCK_API_RESPONSES=false
+ENABLE_DEBUG_LOGGING=false
 ```
 
 ---
@@ -1116,22 +1163,26 @@ docs(readme): update deployment instructions
 ### Phase 1: 基盤構築（4週間）
 
 - [X] プロジェクト初期化
+- [X] OpenAPI仕様書作成
 - [ ] MCPサーバー骨格実装
-- [ ] Building OS APIクライアント実装
-- [ ] ユニットテスト整備
+- [ ] APIクライアント基盤実装
+- [ ] ユニットテスト環境構築
 
-### Phase 2: コア機能実装（6週間）
+### Phase 2: 認証・コア機能実装（6週間）
 
-- [ ] ビル管理ツール実装
-- [ ] スペース管理ツール実装
-- [ ] エネルギー管理ツール実装
+- [ ] 認証ツール実装 (login, refresh_token)
+- [ ] デジタルツインツール実装 (search_digital_twin)
+- [ ] ポイントデータツール実装 (get_latest_data, get_history_data)
+- [ ] 機器制御ツール実装 (send_command)
 - [ ] 統合テスト
 
-### Phase 3: A2A機能実装（4週間）
+### Phase 3: 高度機能実装（4週間）
 
-- [ ] エージェント協調ツール実装
-- [ ] 複数ビル間通信プロトコル確立
-- [ ] エージェント能力検索機能
+- [ ] スケジュール管理ツール実装
+- [ ] プリセット管理ツール実装
+- [ ] データ抽出ツール実装
+- [ ] リアルタイム通信ツール実装
+- [ ] WebSocket接続管理
 
 ### Phase 4: インフラ・デプロイ（3週間）
 
@@ -1139,6 +1190,7 @@ docs(readme): update deployment instructions
 - [ ] CI/CDパイプライン構築
 - [ ] Staging環境デプロイ
 - [ ] 負荷テスト
+- [ ] セキュリティテスト
 
 ### Phase 5: 本番リリース（2週間）
 
@@ -1146,6 +1198,7 @@ docs(readme): update deployment instructions
 - [ ] 監視・アラート設定
 - [ ] ドキュメント整備
 - [ ] 運用手順書作成
+- [ ] ユーザートレーニング
 
 ---
 
@@ -1153,24 +1206,26 @@ docs(readme): update deployment instructions
 
 ### Short-term (3-6ヶ月)
 
-- リアルタイムイベント通知（WebSocket）
-- ダッシュボードUI構築
-- モバイルアプリ連携
+- **エラーハンドリング強化**: リトライ機構、サーキットブレーカー実装
+- **パフォーマンス最適化**: キャッシュ機構、コネクションプーリング
+- **セキュリティ強化**: リクエスト署名検証、レート制限
+- **モニタリング強化**: カスタムメトリクス、アラートルール
 
 ### Mid-term (6-12ヶ月)
 
-- 機械学習による予測機能
-  - 占有率予測
-  - エネルギー最適化
-- 外部サービス連携（天気API、交通情報等）
-- マルチリージョン展開
+- **機械学習連携**: 異常検知、予測メンテナンス
+- **マルチテナント対応**: テナント別データ分離、権限管理
+- **グラフィカルUI**: ダッシュボード、設定画面
+- **モバイルアプリ**: スマートフォンアプリ連携
+- **外部サービス連携**: 天気API、交通情報、カレンダー
 
 ### Long-term (12ヶ月以降)
 
-- 都市スケールの協調制御
-- カーボンニュートラル管理
-- デジタルツイン統合
-- サードパーティーエコシステム構築
+- **マルチリージョン展開**: グローバルスケール対応
+- **エッジコンピューティング**: ローカル処理、オフライン対応
+- **デジタルツイン高度化**: 3Dモデル、VR/AR連携
+- **サードパーティーエコシステム**: プラグインアーキテクチャ
+- **カーボンニュートラル管理**: CO2排出量追跡、最適化
 
 ---
 
