@@ -18,11 +18,6 @@ class BuildingOSMCPServer {
       {
         name: 'building-os-mcp-server',
         version: '1.0.0',
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
       }
     );
 
@@ -90,10 +85,10 @@ class BuildingOSMCPServer {
       try {
         switch (name) {
           case 'search_digital_twin':
-            return await this.handleSearchDigitalTwin(args as DigitalTwinSearchRequest);
+            return await this.handleSearchDigitalTwin(args as unknown as DigitalTwinSearchRequest);
           
           case 'get_latest_data':
-            return await this.handleGetLatestData(args as PointDataLatestRequest);
+            return await this.handleGetLatestData(args as unknown as PointDataLatestRequest);
           
           default:
             throw new Error(`Unknown tool: ${name}`);

@@ -3,17 +3,78 @@
 ## 📋 プロジェクト概要
 
 ### プロジェクト名
-
 Building OS MCP Server
 
 ### 目的
-
 スマートビルディングの各種APIをMCPサーバー経由で提供し、AIエージェントがビル管理機能を利用できるようにする。
 認証、IoT制御、データ抽出、リアルタイム通信の4つのAPIドメインを統合し、包括的なビル管理システムを構築する。
 
 ### アーキテクチャ方針
-
 疎結合型 - 既存のBuilding OS APIをAPI Gateway経由で利用し、MCPサーバーは外部インターフェースとして機能する
+
+## 🚀 クイックスタート
+
+### 1. 依存関係のインストール
+```bash
+cd packages/mcp-server
+npm install
+```
+
+### 2. 環境変数の設定
+```bash
+cp .env.example .env
+# .envファイルを編集してAPIのURLを設定
+```
+
+### 3. ビルドと起動
+```bash
+npm run build
+npm run dev
+```
+
+### 4. Claude Desktopでの設定
+
+`~/Library/Application Support/Claude/claude_desktop_config.json` に以下を追加：
+
+```json
+{
+  "mcpServers": {
+    "building-os": {
+      "command": "node",
+      "args": ["/path/to/bop-mcp-server/packages/mcp-server/dist/index.js"],
+      "env": {
+        "HOT_API_URL": "https://your-api-endpoint.com/v1"
+      }
+    }
+  }
+}
+```
+
+Claude Desktopを再起動後、以下のような質問でテストできます：
+- "Building OSのデジタルツインのトポロジー情報を取得してください"
+- "ポイントID ['uuid1', 'uuid2'] の最新データを取得してください"
+
+## ✅ 現在の実装状況
+
+### 実装済み（Phase 1完了）
+- [x] プロジェクト初期化
+- [x] OpenAPI仕様書作成
+- [x] MCPサーバー骨格実装
+- [x] APIクライアント基盤実装
+- [x] 2つのコアツール実装
+  - `search_digital_twin`: デジタルツイン情報検索
+  - `get_latest_data`: ポイントデータ最新値取得
+- [x] Claude Desktopとの連携テスト完了
+
+### 今後の実装予定
+- [ ] 認証ツール (login, refresh_token)
+- [ ] 機器制御ツール (send_command)
+- [ ] スケジュール管理ツール
+- [ ] プリセット管理ツール
+- [ ] データ抽出ツール
+- [ ] リアルタイム通信ツール
+- [ ] AWS CDKインフラ実装
+- [ ] CI/CDパイプライン構築
 
 ---
 
